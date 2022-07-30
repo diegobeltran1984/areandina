@@ -1,47 +1,113 @@
-# Use the latest 2.1 version of CircleCI pipeline process engine.
-# See: https://circleci.com/docs/2.0/configuration-reference
-version: 2.1
+import network, time, urequests
+from time import sleep
+from machine import Pin, SoftSPI, I2C
+from mfrc522 import MFRC522
+from ssd1306 import SSD1306_I2C
+import framebuf
 
-# Orbs are reusable packages of CircleCI configuration that you may share across projects, enabling you to create encapsulated, parameterized commands, jobs, and executors that can be used across multiple projects.
-# See: https://circleci.com/docs/2.0/orb-intro/
-orbs:
-  # The python orb contains a set of prepackaged CircleCI configuration you can use repeatedly in your configuration files
-  # Orb commands and jobs help you with common scripting around a language/tool
-  # so you dont have to copy and paste it everywhere.
-  # See the orb documentation here: https://circleci.com/developer/orbs/orb/circleci/python
-  python: circleci/python@1.5.0
+#Modulo RFID
+sck = Pin(18, Pin.OUT)
+mosi = Pin(23, Pin.OUT)
+miso = Pin(19, Pin.OUT)
+spi = SoftSPI(baudrate=100000, polarity=0, phase=0, sck=sck, mosi=mosi, miso=miso)
+sda = Pin(5, Pin.OUT)
 
-# Define a job to be invoked later in a workflow.
-# See: https://circleci.com/docs/2.0/configuration-reference/#jobs
-jobs:
-  build-and-test: # This is the name of the job, feel free to change it to better match what you're trying to do!
-    # These next lines defines a Docker executors: https://circleci.com/docs/2.0/executor-types/
-    # You can specify an image from Dockerhub or use one of the convenience images from CircleCI's Developer Hub
-    # A list of available CircleCI Docker convenience images are available here: https://circleci.com/developer/images/image/cimg/python
-    # The executor is the environment in which the steps below will be executed - below will use a python 3.10.2 container
-    # Change the version below to your required version of python
-    docker:
-      - image: cimg/python:3.10.2
-    # Checkout the code as the first step. This is a dedicated CircleCI step.
-    # The python orb's install-packages step will install the dependencies from a Pipfile via Pipenv by default.
-    # Here we're making sure we use just use the system-wide pip. By default it uses the project root's requirements.txt.
-    # Then run your tests!
-    # CircleCI will report the results back to your VCS provider.
-    steps:
-      - checkout
-      - python/install-packages:
-          pkg-manager: pip
-          # app-dir: ~/project/package-directory/  # If you're requirements.txt isn't in the root directory.
-          # pip-dependency-file: test-requirements.txt  # if you have a different name for your requirements file, maybe one that combines your runtime and test requirements.
-      - run:
-          name: Run tests
-          # This assumes pytest is installed via the install-package step above
-          command: pytest
+#pantalla led
+ancho = 128
+alto = 64
+i2c = I2C(0, scl=Pin(22), sda=Pin(21))
+oled = SSD1306_I2C(ancho, alto, i2c)
 
-# Invoke jobs via workflows
-# See: https://circleci.com/docs/2.0/configuration-reference/#workflows
-workflows:
-  sample: # This is the name of the workflow, feel free to change it to better match your workflow.
-    # Inside the workflow, you define the jobs you want to run.
-    jobs:
-      - build-and-test
+print(i2c.scan())
+
+def buscar_icono(ruta):
+    dibujo= open(ruta, "rb")  # Abrir en modo lectura de bist
+    dibujo.readline() # metodo para ubicarse en la primera linea de los bist
+    xy = dibujo.readline() # ubicarnos en la segunda linea
+    x = int(xy.split()[0])  # split  devuelve una lista de los elementos de la variable solo 2 elemetos
+    y = int(xy.split()[1])
+    icono = bytearray(dibujo.read())  # guardar en matriz de bites
+    dibujo.close()
+    return framebuf.FrameBuffer(icono, x, y, framebuf.MONO_HLSB)
+
+
+def do_write():
+
+    try:
+        while (True):
+            
+            #Mostrar LOGO en pantalla
+            oled.blit(buscar_icono("Imagenes/Fiducoldex.pbm"), 3, 8) # ruta y sitio de ubicación
+            oled.show()
+            time.sleep(2)
+            oled.fill(0)
+            oled.show()
+            
+            #imprimir mensaje en pantalla led
+            oled.text("**Coloque la ", 0, 10)
+            oled.text("tarjeta para ", 0, 25)
+            oled.text("ser registrada** ", 0, 40)
+            oled.show()
+            time.sleep(4)
+            oled.fill(0)
+            oled.show()
+            
+            rdr = MFRC522(spi, sda)
+    
+            (stat, tag_type) = rdr.request(rdr.REQIDL)  
+
+
+            if stat == rdr.OK:
+                
+                (stat, raw_uid) = rdr.anticoll()
+
+                if stat == rdr.OK:
+
+                    print("Nueva tarjeta detectada")
+                    print("")
+
+                    if rdr.select_tag(raw_uid) == rdr.OK:
+                        
+                        key = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+                            
+                        if rdr.auth(rdr.AUTHENT1A, 8, key, raw_uid) == rdr.OK:
+                            stat = rdr.write(8, b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f")
+                            rdr.stop_crypto1()
+                            if stat == rdr.OK:
+                                print("Tarjeta registrada")
+                              
+                                oled.text("Tarjeta ", 0, 15)
+                                oled.text("registrada", 0, 25)
+                                oled.show()
+                                time.sleep(4)
+                                oled.fill(0)
+                                oled.show()
+                          
+                            else:
+                                print("Fallo al registrar la tajeta")
+                                oled.text("Fallo al registrar", 0, 15)
+                                oled.text("la tajeta", 0, 25)
+                                oled.show()
+                                time.sleep(4)
+                                oled.fill(0)
+                                oled.show()  
+                        else:
+                            print("Error de autenticación")
+                            oled.text("Error de ", 0, 15)
+                            oled.text("autenticacion", 0, 25)
+                            oled.show()
+                            time.sleep(4)
+                            oled.fill(0)
+                            oled.show()                             
+                    else:
+                        print("No se puede seleccionar la etiqueta")
+                        oled.text("No se puede ", 0, 15)
+                        oled.text("seleccionar la etiqueta", 0, 25)
+                        oled.show()
+                        time.sleep(4)
+                        oled.fill(0)
+                        oled.show()   
+         
+    except KeyboardInterrupt:
+        print("Bye")
+do_write()
